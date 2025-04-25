@@ -5,3 +5,5 @@ lxml
 python-docx
 azure-ai-textanalytics
 python-dotenv
+azure-cosmos
+azure-identity

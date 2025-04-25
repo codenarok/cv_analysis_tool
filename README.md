@@ -2,34 +2,37 @@
 
 ## Project Goal
 
-To create a Python application that automates the process of searching for jobs on the UK Civil Service Jobs website, scrapes relevant details from job postings (including closing dates), compares them against a user's CV using Azure AI Language service for suitability, and saves the matched job details along with the scrape date to a CSV file.
+To create a Python application that automates the process of searching for jobs on the UK Civil Service Jobs website, scrapes relevant details from job postings (including closing dates), writes each job's data to Azure Cosmos DB (using Azure AD authentication) immediately after scraping, optionally compares them against a user's CV using Azure AI Language service for suitability, and finally saves all scraped job details to a CSV file.
 
 ## Core Features
 
-1.  **Automated Browser Navigation:** Uses Selenium to open the Civil Service Jobs website.
-2.  **Manual Login:** Pauses execution to allow the user to log in manually.
-3.  **Job List Scraping:** Extracts job titles, departments, and links from the search results page.
-4.  **Detailed Job Scraping:** Navigates to each job link found and extracts detailed information (description, location, salary, grade, skills, closing date, etc.).
-5.  **Date Recording:** Captures the date the script is run ('Scrape Date') for each job.
-6.  **CV Processing:** Reads and processes text content from a user-provided CV file (`.docx`).
-7.  **Azure AI Language Integration:** Uses Azure AI Language service (e.g., Key Phrase Extraction) to analyze both the CV and the scraped job descriptions.
-8.  **CV Matching:** Compares the analysis results from the CV and job descriptions to determine job suitability based on defined criteria (e.g., keyword/phrase overlap).
+1.  **Automated Browser Navigation:** Uses Selenium (headless) to open the Civil Service Jobs website and initiate a search.
+2.  **Job List Scraping:** Extracts job titles, departments, and links from the search results page.
+3.  **Detailed Job Scraping:** Navigates to each job link found and extracts detailed information (description, location, salary, grade, skills, closing date, etc.).
+4.  **Date Recording:** Captures the date the script is run ('Scrape Date') for each job.
+5.  **Incremental Cosmos DB Writing:** Writes the details of each scraped job to a specified Azure Cosmos DB container immediately after scraping, using Azure AD authentication via `azure-identity`.
+6.  **CV Processing:** Reads and processes text content from a user-provided CV file (`.docx`) (Optional/Separate Flow).
+7.  **Azure AI Language Integration:** Uses Azure AI Language service (e.g., Key Phrase Extraction) to analyze both the CV and the scraped job descriptions (Optional/Separate Flow).
+8.  **CV Matching:** Compares the analysis results from the CV and job descriptions to determine job suitability based on defined criteria (Optional/Separate Flow).
 9.  **Pagination Handling:** Automatically navigates through multiple pages of job search results.
-10. **CSV Output:** Saves the details of *all* scraped jobs (including Scrape Date and Closing Date) to a CSV file.
+10. **CSV Output:** Saves the details of *all* scraped jobs (including Scrape Date and Closing Date) to a CSV file at the end of the process.
 
 ## Prerequisites
 
 *   Python 3.8+ installed.
 *   Access to a web browser supported by Selenium (e.g., Chrome, Firefox).
 *   An Azure account with an active subscription.
-*   An Azure AI Language service resource created in the Azure portal.
-*   The endpoint and an API key for the Azure AI Language resource.
-*   A CV file in `.docx` format.
+*   An Azure AI Language service resource created in the Azure portal (Optional, for matching).
+*   An Azure Cosmos DB account, database, and container created in the Azure portal.
+*   **Azure AD Identity Setup:** An Azure AD identity (e.g., Managed Identity for Azure services, or a Service Principal, or your user identity via Azure CLI/VS Code login for local development) configured with appropriate permissions (e.g., `Cosmos DB Built-in Data Contributor` role) on the Cosmos DB account.
+*   The endpoint and an API key for the Azure AI Language resource (Optional).
+*   The endpoint for the Azure Cosmos DB account.
+*   A CV file in `.docx` format (Optional, for matching).
 
 ## Libraries to Install
 
 ```bash
-pip install selenium webdriver-manager beautifulsoup4 lxml python-docx azure-ai-textanalytics python-dotenv
+pip install selenium webdriver-manager beautifulsoup4 lxml python-docx azure-ai-textanalytics python-dotenv azure-cosmos azure-identity
 ```
 
 ## Configuration
@@ -37,71 +40,53 @@ pip install selenium webdriver-manager beautifulsoup4 lxml python-docx azure-ai-
 The application will require the following configuration, ideally stored securely (e.g., using a `.env` file and the `python-dotenv` library):
 
 *   `TARGET_URL`: The starting URL for Civil Service Jobs (e.g., `https://www.civilservicejobs.service.gov.uk/csr/index.cgi`)
-*   `CV_FILE_PATH`: The full path to the user's CV `.docx` file.
-*   `AZURE_LANGUAGE_ENDPOINT`: The endpoint for your Azure AI Language resource.
-*   `AZURE_LANGUAGE_KEY`: An API key for your Azure AI Language resource.
 *   `OUTPUT_CSV_FILE`: The desired name for the output CSV file (e.g., `matched_jobs.csv`).
-*   `LOGIN_WAIT_TIME`: Time in seconds to wait for manual login (e.g., 60).
-*   `MATCH_THRESHOLD`: A value (e.g., number of overlapping key phrases) to determine if a job is suitable.
+*   `COSMOS_ENDPOINT`: The endpoint for your Azure Cosmos DB account.
+*   `COSMOS_DATABASE_NAME`: The name of your Cosmos DB database.
+*   `COSMOS_CONTAINER_NAME`: The name of your Cosmos DB container.
+*   `CV_FILE_PATH`: The full path to the user's CV `.docx` file (Optional).
+*   `AZURE_LANGUAGE_ENDPOINT`: The endpoint for your Azure AI Language resource (Optional).
+*   `AZURE_LANGUAGE_KEY`: An API key for your Azure AI Language resource (Optional).
+*   `MATCH_THRESHOLD`: A value (e.g., number of overlapping key phrases) to determine if a job is suitable (Optional).
+*   **(Optional, for Service Principal Auth):** `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` (or certificate path/thumbprint).
 
 ## Detailed Steps
 
 1.  **Initialization:**
     *   Load configuration from environment variables (`.env` file).
-    *   Initialize Selenium WebDriver using `webdriver-manager`.
-    *   Initialize Azure `TextAnalyticsClient` using the endpoint and key.
-    *   *(CSV header is now handled dynamically by `csv_writer.py`)*
+    *   Initialize Azure Cosmos DB client (using `DefaultAzureCredential`), database, and container client.
+    *   Initialize Selenium WebDriver using `webdriver-manager` in headless mode.
+    *   Initialize Azure `TextAnalyticsClient` using the endpoint and key (Optional).
 
-2.  **Login and Navigate:**
+2.  **Navigate and Search:**
     *   Navigate to `TARGET_URL`.
-    *   Print a message asking the user to log in and perform a search.
-    *   Wait for `LOGIN_WAIT_TIME` seconds (`time.sleep()`).
+    *   Find and click the main 'Search for jobs' button.
+    *   Wait for a defined period (e.g., 30 seconds) for search results to load.
 
 3.  **CV Processing (If Matching is Enabled - Currently Separate):**
-    *   *(Steps for CV reading and analysis remain but are not integrated into the main scraping flow in `main.py` as currently written)*
+    *   *(Steps for CV reading and analysis remain but are not integrated into the main scraping flow)*
 
 4.  **Pagination Loop:**
     *   Start a loop that continues as long as there are jobs to process and potentially a "next" page.
     *   **Inside the loop:**
-        *   **Scrape Job Links from Current Page (Scraping Point #1):**
-            *   Wait for the job list container to be present.
-            *   Find all job list items.
-            *   For each list item, extract the job title, department, and the URL from the nested link.
-            *   Store these as a list of dictionaries: `[{'title': '...', 'link': '...', 'department': '...'}, ...]`.
+        *   **Scrape Job Links from Current Page:** Extract title, link, department.
         *   **Process Each Job Link:**
-            *   Create an empty list `all_job_details` to store data for *all* scraped jobs.
-            *   Iterate through the extracted job links from the current page.
-            *   For each job `job_info` (dictionary with title, link, department):
+            *   Iterate through the extracted job links.
+            *   For each job `job_info`:
                 *   Navigate to `job_info['link']`.
-                *   **Scrape Job Details (Scraping Point #2):**
-                    *   Wait for the main content panel to load.
-                    *   Define a function `scrape_job_details(driver, job_url, job_title, department)`:
-                        *   Get the current date (`Scrape Date`).
-                        *   Initialize a dictionary `job_details` with all expected fields, including `Scrape Date`.
-                        *   Use Selenium/BeautifulSoup to parse `driver.page_source`.
-                        *   Extract data using specific selectors (see "HTML Element Selectors" below), including the `Closing Date`. Handle cases where elements might be missing. Store extracted details in the `job_details` dictionary.
-                    *   Call `scrape_job_details` to get the `job_details` dictionary.
-                    *   Append the `job_details` dictionary to the `all_job_details` list.
-                *   *(Optional Delay):* Add a small `time.sleep()` between requests.
-        *   **Navigate Back to Search Results:** After processing all jobs on the page, navigate back to the search results page URL.
-        *   **Navigate to Next Page:**
-            *   Attempt to find and click the "next" page link.
-            *   If the link is found, increment page counter and continue loop.
-            *   If the link is not found, break the pagination loop.
+                *   **Scrape Job Details:** Call `scrape_job_details` to get the `job_details` dictionary (including `Scrape Date`, `Closing Date`).
+                *   **Write to Cosmos DB:** If details were scraped successfully and Cosmos DB is configured, call `write_job_to_cosmos` to upsert the `job_details` into the container.
+                *   Append `job_details` to the `all_job_details` list (for CSV).
+                *   *(Optional Delay)*
+        *   **Navigate Back to Search Results.**
+        *   **Navigate to Next Page.**
 
-5.  **Save All Data:**
-    *   After the loop finishes, check if `all_job_details` contains data.
-    *   Define a function `save_to_csv(data_list, filename)`:
-        *   Uses the `csv` module (`csv.DictWriter`).
-        *   Opens the file in write mode (`'w'`) with `newline=''` and `encoding='utf-8'`.
-        *   Dynamically gets `fieldnames` from the keys of the first dictionary in `data_list`.
-        *   Writes the header row.
-        *   Writes all rows from `data_list`.
-    *   Call `save_to_csv` with `all_job_details` and the `OUTPUT_CSV_FILE` name.
+5.  **Save All Data to CSV:**
+    *   After the loop finishes, call `save_to_csv` with `all_job_details` and the `OUTPUT_CSV_FILE` name.
 
 6.  **Cleanup:**
     *   Close the browser: `driver.quit()`.
-    *   Print "Scraping complete. Results saved to [CSV file name]."
+    *   Print completion message.
 
 ## HTML Element Selectors (Examples)
 
@@ -142,14 +127,15 @@ Use Selenium's `find_element(s)` with `By.CSS_SELECTOR` or `By.XPATH`, or use Be
 
 *Note: These selectors are based on potential HTML structure and might need adjustments based on the actual website.*
 
-## Data Structure (Example for CSV)
+## Data Structure (Example for CSV / Cosmos DB Item)
 
 A dictionary for each scraped job, including fields like:
 
 ```python
 {
-    'Scrape Date': 'YYYY-MM-DD', # Added
-    'Job Title': '...',
+    'id': 'UNIQUE_JOB_IDENTIFIER', # Added for Cosmos DB (e.g., Link or Ref Num)
+    'Scrape Date': 'YYYY-MM-DD',
+    'Job Title': '...', # Used as Partition Key in this example
     'Reference Number': '...',
     'Link': '...',
     'Department': '...', # Scraped from list page or details page if possible
@@ -160,7 +146,7 @@ A dictionary for each scraped job, including fields like:
     'Role Type': '...',
     'Working Pattern': '...',
     'Number Available': '...', # Renamed from 'Number of jobs available' for consistency
-    'Closing Date': '...', # Added
+    'Closing Date': '...',
     'Job Summary': '...',
     'Job Description': '...',
     'Person Specification': '...',
@@ -184,5 +170,7 @@ The `fieldnames` for the `csv.DictWriter` will be dynamically generated from the
     *   Network requests (Selenium navigation, Azure API calls).
     *   Finding elements on the page (`NoSuchElementException`).
     *   Parsing HTML (`AttributeError` if structure is unexpected).
+    *   Cosmos DB operations (`CosmosHttpResponseError`).
+*   Handle potential errors during Azure AD authentication (e.g., missing credentials, insufficient permissions).
 *   Implement retries for Azure API calls if appropriate (e.g., for transient network issues).
 *   Log errors to a file or the console for debugging.

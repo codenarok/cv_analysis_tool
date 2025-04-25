@@ -1,0 +1,36 @@
+# Environment variables
+.env
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Distribution / packaging
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Output files
+*.csv
+*.log
+
+# IDE / Editor specific
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln.docstates
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Other
+.DS_Store

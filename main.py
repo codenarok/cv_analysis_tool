@@ -12,6 +12,7 @@ from src.scraping.job_details_scraper import scrape_job_details # Using the revi
 # from src.ai.azure_analyzer import initialize_azure_client, analyze_text_with_azure # Still commented out
 # from src.matching.matcher import compare_key_phrases # Still commented out
 from src.data.csv_writer import save_to_csv
+from src.data.cosmos_writer import initialize_cosmos_client, get_cosmos_container, write_job_to_cosmos # Added Cosmos imports
 
 # Selenium imports for finding elements
 from selenium.webdriver.common.by import By
@@ -31,16 +32,34 @@ def random_delay(min_seconds=10, max_seconds=15):
 
 # --- Main Execution ---
 def main():
-    """Main function: Scrapes job details across pages and saves to CSV."""
-    logging.info("Starting CV Analysis Tool (Full Scraping & CSV Export Mode)...")
+    """Main function: Scrapes job details, writes to Cosmos DB, and saves to CSV."""
+    logging.info("Starting CV Analysis Tool (Scraping, Cosmos DB & CSV Export Mode)...")
     driver = None
-    all_job_details = [] # List to store details from all pages
+    all_job_details = [] # List to store details for final CSV write
+    cosmos_container = None # Initialize Cosmos container client
 
     try:
         # 1. Load Configuration
         logging.info("Loading configuration...")
         config = load_config()
         logging.info("Configuration loaded.")
+
+        # 1.5 Initialize Cosmos DB Client and Container
+        if config.get('COSMOS_ENDPOINT') and config.get('COSMOS_DATABASE_NAME') and config.get('COSMOS_CONTAINER_NAME'):
+            logging.info("Initializing Cosmos DB connection using Azure Identity...")
+            cosmos_client = initialize_cosmos_client(config['COSMOS_ENDPOINT'])
+            if cosmos_client:
+                cosmos_container = get_cosmos_container(
+                    cosmos_client,
+                    config['COSMOS_DATABASE_NAME'],
+                    config['COSMOS_CONTAINER_NAME']
+                )
+                if not cosmos_container:
+                    logging.error("Failed to get Cosmos DB container. Will proceed without writing to Cosmos DB.")
+            else:
+                 logging.error("Failed to initialize Cosmos DB client. Will proceed without writing to Cosmos DB.")
+        else:
+            logging.warning("Cosmos DB configuration (ENDPOINT, DATABASE_NAME, CONTAINER_NAME) missing. Skipping Cosmos DB integration.")
 
         # 2. Initialize WebDriver in Headless Mode
         logging.info("Initializing WebDriver in headless mode...")
@@ -116,6 +135,11 @@ def main():
                     details = scrape_job_details(driver, job_url, job_title, job_department)
 
                     if details:
+                        # Write to Cosmos DB immediately if container is available
+                        if cosmos_container:
+                            write_job_to_cosmos(cosmos_container, details.copy()) # Pass a copy to avoid modification issues
+
+                        # Append to list for final CSV write
                         all_job_details.append(details)
                         logging.info(f"Successfully scraped details for '{job_title}'")
                     else:
@@ -177,15 +201,15 @@ def main():
                 logging.warning("Stopping pagination due to error.")
                 break # Exit loop on error
 
-        # 7. Save All Collected Data
+        # 7. Save All Collected Data to CSV (Kept as secondary output)
         logging.info(f"\nFinished scraping all pages. Total jobs processed: {len(all_job_details)}")
         if all_job_details:
             output_filename = config['OUTPUT_CSV_FILE']
             absolute_output_path = os.path.abspath(output_filename)
-            logging.info(f"Attempting to save all scraped job details to: {absolute_output_path}")
+            logging.info(f"Attempting to save all scraped job details to CSV: {absolute_output_path}")
             save_to_csv(all_job_details, absolute_output_path)
         else:
-            logging.info("No job details were successfully scraped.")
+            logging.info("No job details were successfully scraped to save to CSV.")
 
     except FileNotFoundError as e:
         logging.error(f"Configuration Error: {e}")
